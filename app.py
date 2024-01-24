@@ -1,15 +1,20 @@
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 import mysql.connector
+from webauthn import generate_authentication_options, generate_registration_options, verify_registration_response
+import base64
 
 app = Flask(__name__)
+app.secret_key = 'Password123___'
 app.config['MYSQL_HOST'] = 'localhost'
 app.config['MYSQL_USER'] = 'root'
 app.config['MYSQL_PASSWORD'] = 'Engels666___'
 app.config['MYSQL_DB'] = 'todo-app'
-CORS(app, origins=["http://localhost:3000"],
-     allow_headers=["Content-Type", "Authorization"],
-     methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
+# CORS(app, resources={r"/*": {"origins": "http://localhost:3000"}}, supports_credentials=True)
+# CORS(app, supports_credentials=True, origins=["http://localhost:3000"],
+#      allow_headers=["Content-Type", "Authorization"],
+#      methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
+CORS(app, supports_credentials=True)
 
 db = mysql.connector.connect(
     host=app.config['MYSQL_HOST'],
@@ -34,6 +39,134 @@ class Todo:
 @app.route('/api')
 def home():
     return "Todo App Home Page"
+
+USER_STORE = {}
+print("USER_STORE:", USER_STORE)
+
+@app.route('/register', methods=['POST'])
+def register():
+    print("Request received in /register")
+    # Extract user information from the request
+    username = request.json['username']
+
+    # Convert username to bytes for user_id
+    # user_id_bytes = username.encode()
+
+    # Generate registration options
+    options = generate_registration_options(
+        rp_name='Fingerprint App',
+        # rp_id='fingerprint-pwa-6m38.vercel.app',
+        rp_id='localhost',
+        # user_id=user_id_bytes,    # User ID in bytes
+        user_name=username,       # User's name
+    )
+
+    # Serialize options to a JSON compatible format
+    options_dict = {
+        'rp': {'name': options.rp.name, 'id': options.rp.id},
+        'user': {
+            'id': base64.b64encode(options.user.id).decode('utf-8'),
+            'name': options.user.name,
+            'display_name': options.user.display_name
+        },
+        'challenge': base64.b64encode(options.challenge).decode('utf-8'),
+        'pub_key_cred_params': [{'type': p.type, 'alg': p.alg.value} for p in options.pub_key_cred_params],
+        'timeout': options.timeout,
+        'exclude_credentials': [{'id': base64.b64encode(c.id).decode('utf-8'), 'type': c.type} for c in options.exclude_credentials],
+        'authenticator_selection': options.authenticator_selection,
+        'attestation': options.attestation.value if options.attestation else None,
+        # 'user_id': base64.b64encode(user_id_bytes).decode('utf-8')
+    }
+
+    # Store the modified options in the session (uses cookies)
+    session['registration_options'] = options_dict
+    print("Session set in register:", session['registration_options'])
+
+    #Alternative, check for interfeing cookies between session and cognito
+    #Alternative, try adding user cognito to API
+    #Alternative, use DB (not great)
+
+
+    return jsonify(options_dict)
+
+
+@app.route('/register/verify', methods=['POST'])
+def verify_register():
+    print("Request received in /register/verify")
+    # Get the response from the client
+    response = request.json
+    print("Response:", response)
+    try:
+        # Retrieve the stored options
+        options_dict = session.get('registration_options')
+        print('options_dict:', options_dict)
+        if options_dict is None:
+            return jsonify({'error': 'Session data not found'}), 400
+        # # Perform the WebAuthn verification
+        verification = verify_registration_response(
+            credential=response,
+            expected_challenge=options_dict['challenge'],
+            expected_origin='localhost',
+            # expected_rp_id='fingerprint-pwa-6m38.vercel.app',
+            expected_rp_id='localhost',
+            require_user_verification=True
+        )
+        print('verification:' ,verification)
+
+        # # Decode user_id from Base64 back to bytes
+        # user_id_bytes = base64.b64decode(options_dict['user_id'])
+        # # Convert bytes to string assuming it was originally UTF-8 encoded
+        # username = user_id_bytes.decode('utf-8')
+
+        # # Store user's registration information
+        # # Make sure to store only JSON serializable data
+        # USER_STORE[verification.credential_id] = {
+        #     'username': username,
+        #     # Store other necessary details from 'verification' as needed
+        #     # Make sure they are JSON serializable
+        # }
+
+        # return jsonify({'status': 'ok', 'message': 'Registration successful'})
+
+    except Exception as e:
+        print("Error during verification:", e)  # Log the exception
+        # Handle exceptions and return an appropriate response
+        return jsonify({'status': 'failed', 'message': str(e)}), 400
+
+    return jsonify({'status': 'ok', 'message': 'Endpoint logic partially re-added'})
+
+@app.route('/login', methods=['POST'])
+def initiate_login():
+    username = request.json['username']
+
+    # Assuming user_id is derived from username
+    user_id_bytes = username.encode()
+
+    # Generate authentication options
+    options = generate_authentication_options(
+        rp_id='localhost',  # Change to your domain in production
+        user_id=user_id_bytes,
+        # ... other necessary parameters ...
+    )
+
+    # Serialize options to a JSON compatible format
+    options_dict = {
+        'challenge': base64.b64encode(options.challenge).decode('utf-8'),
+        # ... serialize other fields as needed ...
+        'allow_credentials': [{'id': base64.b64encode(cred.id).decode('utf-8'), 'type': cred.type, 'transports': cred.transports} for cred in options.allow_credentials],
+        'user_verification': options.user_verification,
+        # ... add other necessary fields from the options ...
+    }
+
+    # Store the serialized options in the session
+    session['authentication_options'] = options_dict
+
+    return jsonify(options_dict)
+
+
+################################################################################
+################################################################################
+################################################################################
 
 @app.route("/api/todos", methods=["GET", "POST"])
 def todos_list():
@@ -73,7 +206,7 @@ def todo_detail(index):
     elif request.method == "DELETE":
         cursor.execute("DELETE FROM todos WHERE id=%s", (index,))
         db.commit()
-        return "succes", 204
+        return "success", 204
 
 @app.route("/api/todos/<int:todo_id>", methods=["PATCH"])
 def update_todo_state(todo_id):
