@@ -92,36 +92,6 @@ def register():
 
     return response
 
-# @app.route('/register/verify', methods=['POST'])
-# def verify_register():
-#     print("Request received in /register/verify")
-
-#     # Get the response from the client
-#     response = request.json
-#     print("Response from frontend:", response)
-
-#     # options_json = request.
-#     options_json = request.cookies.get('registration_options')
-#     print("Options JSON from cookie:", options_json)
-
-#     try:
-#         # Retrieve the stored options
-
-#         if not options_json:
-#             print("No options JSON found in cookie.")
-#             return jsonify({'error': 'Missing options data'}), 400
-#         else:
-#             print("Options JSON successfully retrieved from cookie.")
-
-#         # Simplified response for debugging
-#         return jsonify({'status': 'ok', 'message': 'Endpoint triggered successfully'})
-
-#     except Exception as e:
-#         print("Error during processing:", e)  # Log the exception
-#         # Return a JSON response with the error message
-#         return jsonify({'status': 'failed', 'message': str(e)}), 500
-
-
 @app.route('/register/verify', methods=['POST'])
 def verify_register():
     # Get the response from the client
@@ -140,25 +110,29 @@ def verify_register():
         options_dict = json.loads(options_json)
         print("options_dict:", options_dict)
 
-        challenge_value = options_dict['challenge']
-        print("challenge_value:", challenge_value)
+        challenge_value_base64 = options_dict['challenge']
+        print("challenge_value:", challenge_value_base64)
+        challenge_value_bytes = base64.urlsafe_b64decode(challenge_value_base64)
+        print("Challenge value (bytes):", challenge_value_bytes)
 
         # # Perform the WebAuthn verification
         verification = verify_registration_response(
             credential=response,
-            expected_challenge=options_dict['challenge'],
-            expected_origin='localhost',
+            expected_challenge=challenge_value_bytes,
+            expected_origin='http://localhost:3000',
             # expected_rp_id='fingerprint-pwa-6m38.vercel.app',
             expected_rp_id='localhost',
-            require_user_verification=True
+            require_user_verification=False,
         )
         print('verification:' ,verification)
 
-        # Decode user_id from Base64 back to bytes
-        user_id_bytes = base64.b64decode(options_dict['user_id'])
+        # Decode user_id from Base64 back to bytes?
+        user_id_bytes = options_dict['user']['id'] # This is not in bytes
+        print("user_id_bytes:", user_id_bytes)
         # Convert bytes to string assuming it was originally UTF-8 encoded
-        username = user_id_bytes.decode('utf-8')
-
+        # username = user_id_bytes.decode('utf-8')
+        username = user_id_bytes
+        print("username:", username)
         # Store user's registration information
         # Make sure to store only JSON serializable data
         USER_STORE[verification.credential_id] = {
