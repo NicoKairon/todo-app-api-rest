@@ -1,4 +1,5 @@
-from flask import Flask, jsonify, request
+import json
+from flask import Flask, jsonify, make_response, request, session
 from flask_cors import CORS
 import mysql.connector
 from webauthn import generate_authentication_options, generate_registration_options, verify_registration_response
@@ -14,7 +15,7 @@ app.config['MYSQL_DB'] = 'todo-app'
 # CORS(app, supports_credentials=True, origins=["http://localhost:3000"],
 #      allow_headers=["Content-Type", "Authorization"],
 #      methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
-CORS(app, supports_credentials=True)
+# CORS(app, supports_credentials=True)
 
 db = mysql.connector.connect(
     host=app.config['MYSQL_HOST'],
@@ -78,30 +79,70 @@ def register():
         # 'user_id': base64.b64encode(user_id_bytes).decode('utf-8')
     }
 
-    # Store the modified options in the session (uses cookies)
-    session['registration_options'] = options_dict
-    print("Session set in register:", session['registration_options'])
+     # Convert options_dict to a JSON string for the cookie
+    options_json = json.dumps(options_dict)
 
-    #Alternative, check for interfeing cookies between session and cognito
-    #Alternative, try adding user cognito to API
-    #Alternative, use DB (not great)
+    # Create the response object with JSON data
+    response = make_response(jsonify(options_dict))
 
+    # Set the cookie with options_dict data
+    response.set_cookie('registration_options', options_json)
+    # response.set_cookie('test_cookie', 'test_value')
+    print("Cookie 'registration_options' set on response")
 
-    return jsonify(options_dict)
+    return response
+
+# @app.route('/register/verify', methods=['POST'])
+# def verify_register():
+#     print("Request received in /register/verify")
+
+#     # Get the response from the client
+#     response = request.json
+#     print("Response from frontend:", response)
+
+#     # options_json = request.
+#     options_json = request.cookies.get('registration_options')
+#     print("Options JSON from cookie:", options_json)
+
+#     try:
+#         # Retrieve the stored options
+
+#         if not options_json:
+#             print("No options JSON found in cookie.")
+#             return jsonify({'error': 'Missing options data'}), 400
+#         else:
+#             print("Options JSON successfully retrieved from cookie.")
+
+#         # Simplified response for debugging
+#         return jsonify({'status': 'ok', 'message': 'Endpoint triggered successfully'})
+
+#     except Exception as e:
+#         print("Error during processing:", e)  # Log the exception
+#         # Return a JSON response with the error message
+#         return jsonify({'status': 'failed', 'message': str(e)}), 500
 
 
 @app.route('/register/verify', methods=['POST'])
 def verify_register():
-    print("Request received in /register/verify")
     # Get the response from the client
     response = request.json
     print("Response:", response)
+
     try:
         # Retrieve the stored options
-        options_dict = session.get('registration_options')
-        print('options_dict:', options_dict)
-        if options_dict is None:
-            return jsonify({'error': 'Session data not found'}), 400
+        options_json = request.cookies.get('registration_options')
+        print("options_json:", options_json)
+
+        if not options_json:
+            return jsonify({'error': 'Missing options data'}), 400
+
+        # Convert the JSON string back to a dictionary
+        options_dict = json.loads(options_json)
+        print("options_dict:", options_dict)
+
+        challenge_value = options_dict['challenge']
+        print("challenge_value:", challenge_value)
+
         # # Perform the WebAuthn verification
         verification = verify_registration_response(
             credential=response,
@@ -113,55 +154,54 @@ def verify_register():
         )
         print('verification:' ,verification)
 
-        # # Decode user_id from Base64 back to bytes
-        # user_id_bytes = base64.b64decode(options_dict['user_id'])
-        # # Convert bytes to string assuming it was originally UTF-8 encoded
-        # username = user_id_bytes.decode('utf-8')
+        # Decode user_id from Base64 back to bytes
+        user_id_bytes = base64.b64decode(options_dict['user_id'])
+        # Convert bytes to string assuming it was originally UTF-8 encoded
+        username = user_id_bytes.decode('utf-8')
 
-        # # Store user's registration information
-        # # Make sure to store only JSON serializable data
-        # USER_STORE[verification.credential_id] = {
-        #     'username': username,
-        #     # Store other necessary details from 'verification' as needed
-        #     # Make sure they are JSON serializable
-        # }
+        # Store user's registration information
+        # Make sure to store only JSON serializable data
+        USER_STORE[verification.credential_id] = {
+            'username': username,
+            # Store other necessary details from 'verification' as needed
+            # Make sure they are JSON serializable
+        }
 
-        # return jsonify({'status': 'ok', 'message': 'Registration successful'})
+        return jsonify({'status': 'ok', 'message': 'Registration successful'})
 
     except Exception as e:
         print("Error during verification:", e)  # Log the exception
         # Handle exceptions and return an appropriate response
         return jsonify({'status': 'failed', 'message': str(e)}), 400
 
-    return jsonify({'status': 'ok', 'message': 'Endpoint logic partially re-added'})
 
-@app.route('/login', methods=['POST'])
-def initiate_login():
-    username = request.json['username']
+# @app.route('/login', methods=['POST'])
+# def initiate_login():
+#     username = request.json['username']
 
-    # Assuming user_id is derived from username
-    user_id_bytes = username.encode()
+#     # Assuming user_id is derived from username
+#     user_id_bytes = username.encode()
 
-    # Generate authentication options
-    options = generate_authentication_options(
-        rp_id='localhost',  # Change to your domain in production
-        user_id=user_id_bytes,
-        # ... other necessary parameters ...
-    )
+#     # Generate authentication options
+#     options = generate_authentication_options(
+#         rp_id='localhost',  # Change to your domain in production
+#         user_id=user_id_bytes,
+#         # ... other necessary parameters ...
+#     )
 
-    # Serialize options to a JSON compatible format
-    options_dict = {
-        'challenge': base64.b64encode(options.challenge).decode('utf-8'),
-        # ... serialize other fields as needed ...
-        'allow_credentials': [{'id': base64.b64encode(cred.id).decode('utf-8'), 'type': cred.type, 'transports': cred.transports} for cred in options.allow_credentials],
-        'user_verification': options.user_verification,
-        # ... add other necessary fields from the options ...
-    }
+#     # Serialize options to a JSON compatible format
+#     options_dict = {
+#         'challenge': base64.b64encode(options.challenge).decode('utf-8'),
+#         # ... serialize other fields as needed ...
+#         'allow_credentials': [{'id': base64.b64encode(cred.id).decode('utf-8'), 'type': cred.type, 'transports': cred.transports} for cred in options.allow_credentials],
+#         'user_verification': options.user_verification,
+#         # ... add other necessary fields from the options ...
+#     }
 
-    # Store the serialized options in the session
-    session['authentication_options'] = options_dict
+#     # Store the serialized options in the session
+#     session['authentication_options'] = options_dict
 
-    return jsonify(options_dict)
+#     return jsonify(options_dict)
 
 
 ################################################################################
