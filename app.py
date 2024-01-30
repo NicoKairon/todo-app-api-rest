@@ -2,7 +2,7 @@ import json
 from flask import Flask, jsonify, make_response, request, session
 from flask_cors import CORS
 import mysql.connector
-from webauthn import generate_authentication_options, generate_registration_options, verify_registration_response
+from webauthn import generate_authentication_options, generate_registration_options, verify_authentication_response, verify_registration_response
 import base64
 
 app = Flask(__name__)
@@ -79,7 +79,7 @@ def register():
         # 'user_id': base64.b64encode(user_id_bytes).decode('utf-8')
     }
 
-     # Convert options_dict to a JSON string for the cookie
+    # Convert options_dict to a JSON string for the cookie
     options_json = json.dumps(options_dict)
 
     # Create the response object with JSON data
@@ -101,7 +101,7 @@ def verify_register():
     try:
         # Retrieve the stored options
         options_json = request.cookies.get('registration_options')
-        print("options_json:", options_json)
+        print("registration_options_json:", options_json)
 
         if not options_json:
             return jsonify({'error': 'Missing options data'}), 400
@@ -126,56 +126,152 @@ def verify_register():
         )
         print('verification:' ,verification)
 
-        # Decode user_id from Base64 back to bytes?
-        user_id_bytes = options_dict['user']['id'] # This is not in bytes
-        print("user_id_bytes:", user_id_bytes)
-        # Convert bytes to string assuming it was originally UTF-8 encoded
-        # username = user_id_bytes.decode('utf-8')
-        username = user_id_bytes
-        print("username:", username)
-        # Store user's registration information
-        # Make sure to store only JSON serializable data
-        USER_STORE[verification.credential_id] = {
-            'username': username,
-            # Store other necessary details from 'verification' as needed
-            # Make sure they are JSON serializable
-        }
+        # Retrieve the public key from the verification result
+        public_key = verification.credential_public_key
+        encoded_public_key = base64.b64encode(public_key).decode('utf-8')  # Convert bytes to Base64 string
+        print('encoded_public_key', encoded_public_key)
 
-        return jsonify({'status': 'ok', 'message': 'Registration successful'})
+        response = make_response(jsonify({'status': 'ok', 'message': 'Registration successful'}))
+        # Set a cookie with public_key ALERT HERE IS THE ERROR, NOT SETTING COOKIE CORRECTLY
+        response.set_cookie('public_key_cookie', encoded_public_key)
+
+        # # Decode user_id from Base64 back to bytes?
+        # user_id_bytes = options_dict['user']['id'] # This is not in bytes
+        # print("user_id_bytes:", user_id_bytes)
+        # # Convert bytes to string assuming it was originally UTF-8 encoded
+        # # username = user_id_bytes.decode('utf-8')
+        # username = user_id_bytes
+        # print("username:", username)
+        # # Store user's registration information
+        # # Make sure to store only JSON serializable data
+        # USER_STORE[verification.credential_id] = {
+        #     'username': username,
+        #     'public_key': public_key
+        # }
+
+        return response
 
     except Exception as e:
         print("Error during verification:", e)  # Log the exception
         # Handle exceptions and return an appropriate response
         return jsonify({'status': 'failed', 'message': str(e)}), 400
 
+@app.route('/login', methods=['POST'])
+def initiate_login():
+    print('username reached login endpoint')
+    username = request.json
+    print('Username:', username)
 
-# @app.route('/login', methods=['POST'])
-# def initiate_login():
-#     username = request.json['username']
+    # Generate authentication options
+    options = generate_authentication_options(
+        rp_id='localhost'
+    )
 
-#     # Assuming user_id is derived from username
-#     user_id_bytes = username.encode()
+    # Serialize options to a JSON compatible format
+    options_dict = {
+    'challenge': base64.urlsafe_b64encode(options.challenge).decode('utf-8'),
+    'timeout': options.timeout,
+    'rp_id': options.rp_id,
+    'allow_credentials': [],  # Assuming this is empty as per your example
+    'user_verification': options.user_verification.value
+    }
+    print('options_dict', options_dict)
 
-#     # Generate authentication options
-#     options = generate_authentication_options(
-#         rp_id='localhost',  # Change to your domain in production
-#         user_id=user_id_bytes,
-#         # ... other necessary parameters ...
-#     )
+    # Convert options_dict to a JSON string for the cookie
+    options_json = json.dumps(options_dict)
 
-#     # Serialize options to a JSON compatible format
-#     options_dict = {
-#         'challenge': base64.b64encode(options.challenge).decode('utf-8'),
-#         # ... serialize other fields as needed ...
-#         'allow_credentials': [{'id': base64.b64encode(cred.id).decode('utf-8'), 'type': cred.type, 'transports': cred.transports} for cred in options.allow_credentials],
-#         'user_verification': options.user_verification,
-#         # ... add other necessary fields from the options ...
-#     }
+    # Create the response object with JSON data
+    response = make_response(jsonify(options_dict))
 
-#     # Store the serialized options in the session
-#     session['authentication_options'] = options_dict
+    # Set the cookie with options_dict data
+    response.set_cookie('verification_options', options_json)
+    # response.set_cookie('test_cookie', 'test_value')
+    print("Cookie 'verification_options' set on response")
 
-#     return jsonify(options_dict)
+    # Return JSON response
+    return response
+
+print('USER STORE', USER_STORE)
+
+@app.route('/login_verify', methods=['POST'])
+def verify_login():
+    print('Login verify reached successfully')
+
+    # Get the response from the client
+    assertion_response = request.json
+    print("Assertion Response:", assertion_response)
+
+    try:
+         # Retrieve the public key
+        public_key_json = request.cookies.get('public_key_cookie')
+        print("public_key_json:", public_key_json)
+
+        if not public_key_json:
+            return jsonify({'error': 'Missing public key'}), 400
+
+        public_key_bytes = base64.urlsafe_b64decode(public_key_json)
+        print("public key bytes", public_key_bytes)
+
+        #Retrieve the stored options
+        verification_options_json = request.cookies.get('verification_options')
+        print('verification_options', verification_options_json)
+
+        if not verification_options_json:
+            return jsonify({'error': 'Missing options data no cookies'}), 400
+
+        # Convert the JSON string back to a dictionary
+        verification_options_dict = json.loads(verification_options_json)
+        print("verification_options_dict:", verification_options_dict)
+
+        challenge_value_base64 = verification_options_dict['challenge']
+        print("challenge_value:", challenge_value_base64)
+        challenge_value_bytes = base64.urlsafe_b64decode(challenge_value_base64)
+        print("Challenge value (bytes):", challenge_value_bytes)
+
+        # Extract the necessary data from assertion_response
+        credential = {
+            "id": assertion_response["id"],
+            "rawId": assertion_response["rawId"],
+            "response": {
+                "authenticatorData": assertion_response["response"]["authenticatorData"],
+                "clientDataJSON": assertion_response["response"]["clientDataJSON"],
+                "signature": assertion_response["response"]["signature"],
+                "userHandle": assertion_response["response"]["userHandle"] if assertion_response["response"]["userHandle"] else None
+            },
+            "type": assertion_response["type"]
+        }
+        print('credential', credential)
+
+        # Retrieve the expected challenge, rp_id, origin, and public key
+        expected_challenge = challenge_value_bytes
+        expected_rp_id = 'localhost'
+        expected_origin = 'http://localhost:3000' #?
+        credential_public_key = public_key_bytes
+        credential_current_sign_count = 0 #this is a hack
+
+        # Perform authentication verification
+        verification_result = verify_authentication_response(
+            credential=credential,
+            expected_challenge=expected_challenge,
+            expected_rp_id=expected_rp_id,
+            expected_origin=expected_origin,
+            credential_public_key=credential_public_key,
+            credential_current_sign_count=credential_current_sign_count,
+        )
+        print("\n[Authentication Verification]")
+        print('verification result', verification_result)
+
+        # Check verification result and handle accordingly
+        if verification_result:  # Assuming a successful verification returns a truthy value
+            # Login success logic here (e.g., creating session)
+            return jsonify({'status': 'ok', 'message': 'Login successful'})
+        else:
+            # Login failure logic here
+            return jsonify({'status': 'failed', 'message': 'Login failed'}), 401
+
+    except Exception as e:
+        print("Error during login verification:", e)
+        return jsonify({'status': 'failed', 'message': str(e)}), 500
 
 
 ################################################################################
